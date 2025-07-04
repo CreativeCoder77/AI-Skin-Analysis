@@ -46,7 +46,7 @@ skin-cancer-ai/
 │   └── styles.css
 │
 ├── templates/                           # HTML templates
-│   ├── 404.html
+│   ├── error.html
 │   ├── details.html
 │   ├── disease_database.html
 │   ├── index.html
