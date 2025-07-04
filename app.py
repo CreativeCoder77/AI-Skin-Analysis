@@ -214,18 +214,14 @@ def load_ml_model():
     custom_objects = {'DepthwiseConv2D': custom_depthwise_conv2d}
     
     try:
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        MODEL_PATH = os.path.join(BASE_DIR, 'Rash_Models', 'Rash_model.h5')
-
-        model = load_model(MODEL_PATH, compile=False, custom_objects=custom_objects)
-        
+        model = load_model(r"/etc/secrets/Rash_model.h5", compile=False, custom_objects=custom_objects)
         print("Model loaded successfully!")
     except Exception as e:
         print(f"Error loading model: {e}")
         return False
     
     try:
-        class_names = open("Rash_Models/labels.txt", "r").readlines()
+        class_names = open(r"/etc/secrets/labels.txt", "r").readlines()
         print("Labels loaded successfully!")
     except FileNotFoundError:
         print("Error: labels.txt file not found!")
