@@ -18,7 +18,7 @@ This project uses an AI-powered image classification model to detect the presenc
 
 ## 🧠 Technology Stack
 
-* **Frontend:** HTML/CSS, JavaScript (or Streamlit/Flask if applicable)
+* **Frontend:** HTML/CSS, JavaScript 
 * **Backend:** Python
 * **AI Model:** Convolutional Neural Network (CNN) trained on skin lesion datasets (e.g., HAM10000)
 * **Libraries:** TensorFlow / Keras, OpenCV, NumPy, Pandas, Matplotlib
