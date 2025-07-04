@@ -214,7 +214,7 @@ def load_ml_model():
     custom_objects = {'DepthwiseConv2D': custom_depthwise_conv2d}
     
     try:
-        model = load_model(r"/etc/secrets/Rash_model.h5", compile=False, custom_objects=custom_objects)
+        model = load_model(r"Rash_Models/Rash_model.h5", compile=False, custom_objects=custom_objects)
         print("Model loaded successfully!")
     except Exception as e:
         print(f"Error loading model: {e}")
