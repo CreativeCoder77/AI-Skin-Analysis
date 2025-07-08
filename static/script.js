@@ -313,8 +313,7 @@ window.onclick = function (event) {
         modal.style.display = 'none';
     }
 }
-console.log("Full response from Flask:", data);
-
+    
 
 
 function displayProbabilities(data) {
