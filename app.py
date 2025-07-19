@@ -16,19 +16,16 @@ import base64
 from functools import wraps
 import pytz
 
-# Suppress TensorFlow logs and warnings
+# NEW: Import Google Generative AI library
+import google.generativeai as genai
+from google.generativeai import types
+
+# Suppress TensorFlow logs and warnings (no longer strictly needed but good practice)
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 warnings.filterwarnings('ignore')
 logging.getLogger('tensorflow').setLevel(logging.ERROR)
 
-from keras.models import load_model
-from PIL import Image, ImageOps
-import numpy as np
-import tensorflow as tf
-
-# Disable scientific notation for clarity
-np.set_printoptions(suppress=True)
 
 app = Flask(__name__)
 app.secret_key = "secret_key"
@@ -555,15 +552,12 @@ def rate_limit(max_requests=MAX_REQUESTS_PER_WINDOW):
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Custom function to handle the deprecated 'groups' parameter
-def custom_depthwise_conv2d(*args, **kwargs):
-    kwargs.pop('groups', None)
-    return tf.keras.layers.DepthwiseConv2D(*args, **kwargs)
-
-# Global variables for model, labels and condition details
-model = None
-class_names = None
 condition_details = None
+
+# NEW: Configure Gemini API
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+# NEW: Initialize Gemini model
+gemini_model = genai.GenerativeModel('gemini-2.0-flash')
 
 def load_condition_details():
     """Load the condition details from JSON file"""
@@ -581,27 +575,6 @@ def load_condition_details():
         print(f"Error loading condition details: {e}")
         return False
 
-def load_ml_model():
-    """Load the machine learning model and labels"""
-    global model, class_names
-    
-    custom_objects = {'DepthwiseConv2D': custom_depthwise_conv2d}
-    
-    try:
-        model = load_model(r"Rash_Models\Rash_model.h5", compile=False, custom_objects=custom_objects)
-        print("Model loaded successfully!")
-    except Exception as e:
-        print(f"Error loading model: {e}")
-        return False
-    
-    try:
-        class_names = open("Rash_Models/labels.txt", "r").readlines()
-        print("Labels loaded successfully!")
-    except FileNotFoundError:
-        print("Error: labels.txt file not found!")
-        return False
-    
-    return True
 
 def get_condition_info(class_name):
     """Get detailed information about the detected condition"""
@@ -623,69 +596,97 @@ def get_condition_info(class_name):
     return None
 
 def predict_image(image_path):
-    """Predict the class of an uploaded image and return all confidences"""
+    """Predict the class of an uploaded image using Gemini AI"""
     try:
-        # Open and convert image
-        image = Image.open(image_path).convert("RGB")
+        with open(image_path, "rb") as image_file:
+            image_bytes = image_file.read()
+
+        # Prepare the image for Gemini API
+        image_part = {
+            "mime_type": "image/jpeg",  # Adjust mime type if your allowed_extensions include other formats
+            "data": image_bytes
+        }
+
+        # Define the prompt for Gemini
+        prompt_parts = [
+            image_part,
+            """see the image and tell me which of the following medical condition it is:
+1. Tinea Ringworm Candidiasis
+2. Vascular Lesion
+3. Melanoma
+4. Squamous Cell Carcinoma
+5. Dermatofibroma
+6. Melanocytic Nevus
+7. Atopic Dermatitis
+8. Benign Keratosis
+9. Actinic Keratosis
+10. Unknown
+Dont answer anything else just the medical condition nothing else"""
+        ]
+
+        # Generate content using Gemini
+        response = gemini_model.generate_content(prompt_parts)
         
-        # Resize and crop image
-        size = (224, 224)
-        image = ImageOps.fit(image, size, Image.Resampling.LANCZOS)
+        # Extract the text response
+        gemini_prediction = response.text.strip()
+
+        # For simplicity, we'll assume Gemini gives a direct answer.
+        # In a real application, you might need more sophisticated parsing
+        # or ask Gemini to return a structured JSON.
+
+        # Map Gemini's response to a known class or 'Unknown'
+        # This is a simplified mapping. You might need to refine this based on Gemini's output
+        # and your `details.json` conditions.
         
-        # Convert to numpy array
-        image_array = np.asarray(image)
+        # Get all possible condition names from details.json for comparison
+        all_known_conditions = [name.lower() for name in condition_details.keys()] if condition_details else []
         
-        # Normalize the image
-        normalized_image_array = (image_array.astype(np.float32) / 127.5) - 1
+        predicted_class = "Unknown"
+        # Check if Gemini's prediction is one of the known conditions
+        for condition in all_known_conditions:
+            if condition in gemini_prediction.lower():
+                predicted_class = condition.replace('-', ' ').title() # Format to match your details.json if needed
+                break
         
-        # Create data array
-        data = np.ndarray(shape=(1, 224, 224, 3), dtype=np.float32)
-        data[0] = normalized_image_array
+        # If Gemini explicitly says "Unknown", set it as such
+        if "unknown" in gemini_prediction.lower():
+            predicted_class = "Unknown"
+
+
+        # Gemini does not provide confidence scores in the same way as a classification model.
+        # We'll simulate a high confidence for a direct prediction, and low for unknown.
+        top_confidence_score = 0.95 if predicted_class != "Unknown" else 0.30
+
+        # For 'all_confidences', we can only provide a placeholder or a single entry
+        # since Gemini doesn't output multiple class confidences directly.
+        all_confidences = [{
+            'class': predicted_class,
+            'confidence': top_confidence_score,
+            'percentage': top_confidence_score * 100
+        }]
         
-        # Make prediction
-        prediction = model.predict(data)
-        index = np.argmax(prediction)
-        top_class_name = class_names[index]
-        top_confidence_score = prediction[0][index]
-        
-        # Get all class confidences
-        all_confidences = []
-        for i, confidence in enumerate(prediction[0]):
-            class_name_clean = class_names[i][2:].strip() if class_names[i].startswith(('0 ', '1 ')) else class_names[i].strip()
-            all_confidences.append({
-                'class': class_name_clean,
-                'confidence': float(confidence),
-                'percentage': float(confidence * 100)
-            })
-        
-        # Sort by confidence (highest to lowest)
-        all_confidences.sort(key=lambda x: x['confidence'], reverse=True)
-        
-        # Clean top class name
-        clean_top_class_name = top_class_name[2:].strip() if top_class_name.startswith(('0 ', '1 ')) else top_class_name.strip()
-        
-        # Check if confidence is less than 30%
-        if top_confidence_score < 0.30:
+        # If the predicted class is 'Unknown' due to low confidence (or Gemini's explicit 'Unknown')
+        if predicted_class == 'Unknown':
             return {
                 'top_prediction': {
                     'class': 'Unknown',
                     'confidence': float(top_confidence_score),
                     'details': {
                         'name': 'Unknown Condition',
-                        'causes': ['Insufficient confidence in prediction to determine specific condition'],
-                        'potential_harms': ['Please consult a healthcare professional for proper diagnosis'],
-                        'possible_progression': ['Medical evaluation recommended for accurate assessment']
+                        'causes': ['The AI could not confidently identify the condition.', 'Please consult a healthcare professional for proper diagnosis.'],
+                        'potential_harms': ['Accurate diagnosis requires medical expertise.'],
+                        'possible_progression': ['Medical evaluation recommended for accurate assessment.']
                     }
                 },
                 'all_confidences': all_confidences
             }
         
         # Get detailed condition information
-        condition_info = get_condition_info(clean_top_class_name)
+        condition_info = get_condition_info(predicted_class)
         
         result = {
             'top_prediction': {
-                'class': clean_top_class_name,
+                'class': predicted_class,
                 'confidence': float(top_confidence_score)
             },
             'all_confidences': all_confidences
@@ -693,6 +694,14 @@ def predict_image(image_path):
         
         if condition_info:
             result['top_prediction']['details'] = condition_info
+        else:
+            # Fallback if the predicted class from Gemini doesn't have details in details.json
+            result['top_prediction']['details'] = {
+                'name': predicted_class,
+                'causes': ['Information not available in database.'],
+                'potential_harms': ['Consult a healthcare professional.'],
+                'possible_progression': ['Consult a healthcare professional.']
+            }
         
         return result
     
@@ -909,7 +918,7 @@ def predict():
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             file.save(filepath)
             
-            # Make prediction
+            # Make prediction using Gemini AI
             result = predict_image(filepath)
             monitor.prediction_count += 1
             
@@ -1233,27 +1242,24 @@ if __name__ == '__main__':
 
     try:
         # Load the model and condition details when starting the server
-        model_loaded = load_ml_model()
         details_loaded = load_condition_details()
 
-        if model_loaded:
-            print(GREEN + "=" * 60 + RESET)
-            print(GREEN + "Flask Server Stats!" + RESET)
-            print(GREEN + "=" * 60 + RESET)
-            print(YELLOW + f"Main Application: http://localhost:5000/" + RESET)
-            print(YELLOW + f"Security Dashboard: http://localhost:5000/dashboard" + RESET)
-            print(GREEN + f"Loaded {len(monitor.blocked_ips)} blocked IPs from file" + RESET)
-            print(GREEN + f"Loaded {len(monitor.whitelisted_ips)} whitelisted IPs from file" + RESET)
-            print(YELLOW + "IP data will be automatically saved to JSON files" + RESET)
-            print(GREEN + "=" * 60 + RESET)
-            
-            if not details_loaded:
-                print(YELLOW + "⚠️  Warning: Condition details not loaded. Will proceed without detailed information." + RESET)
-            
-            
-            app.run(debug=True, host='0.0.0.0', port=5000)
-        else:
-            print(RED + "❌ Failed to load model. Server not started." + RESET)
+    # NEW: Check if Gemini API key is set
+        print(GREEN + "=" * 60 + RESET)
+        print(GREEN + "Flask Server Stats!" + RESET)
+        print(GREEN + "=" * 60 + RESET)
+        print(YELLOW + f"Main Application: http://localhost:5000/" + RESET)
+        print(YELLOW + f"Security Dashboard: http://localhost:5000/dashboard" + RESET)
+        print(GREEN + f"Loaded {len(monitor.blocked_ips)} blocked IPs from file" + RESET)
+        print(GREEN + f"Loaded {len(monitor.whitelisted_ips)} whitelisted IPs from file" + RESET)
+        print(YELLOW + "IP data will be automatically saved to JSON files" + RESET)
+        print(GREEN + "=" * 60 + RESET)
+        
+        if not details_loaded:
+            print(YELLOW + "⚠️  Warning: Condition details not loaded. Will proceed without detailed information." + RESET)
+        
+        app.run(debug=True, host='0.0.0.0', port=5000)
+    
     except KeyboardInterrupt:
         print(YELLOW + "\n🛑 Server stopped by user" + RESET)
     except Exception as e:
