@@ -27,8 +27,7 @@ This project uses an AI-powered image classification model to detect the presenc
 
 ```
 skin-cancer-ai/
-│
-├── Rash_Models/                         # Folder for trained AI models
+|
 │
 ├── static/                              # Static files (images, styles, JS)
 │   ├── dataset/
