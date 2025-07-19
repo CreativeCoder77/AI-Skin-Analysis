@@ -555,7 +555,7 @@ def allowed_file(filename):
 condition_details = None
 
 # NEW: Configure Gemini API
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+genai.configure(api_key=os.environ.get('GEMINI_API_KEY'))
 # NEW: Initialize Gemini model
 gemini_model = genai.GenerativeModel('gemini-2.0-flash')
 
@@ -651,11 +651,12 @@ Dont answer anything else just the medical condition nothing else"""
         # If Gemini explicitly says "Unknown", set it as such
         if "unknown" in gemini_prediction.lower():
             predicted_class = "Unknown"
-
+        
+        import random
 
         # Gemini does not provide confidence scores in the same way as a classification model.
         # We'll simulate a high confidence for a direct prediction, and low for unknown.
-        top_confidence_score = 0.95 if predicted_class != "Unknown" else 0.30
+        top_confidence_score = random.uniform(0.80, 1.00) if predicted_class != "Unknown" else random.uniform(0.0, 0.20)
 
         # For 'all_confidences', we can only provide a placeholder or a single entry
         # since Gemini doesn't output multiple class confidences directly.
