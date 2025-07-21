@@ -595,22 +595,27 @@ def get_condition_info(class_name):
     
     return None
 
+import re
+
 def predict_image(image_path):
-    """Predict the class of an uploaded image using Gemini AI"""
+    """Predict the class of an uploaded skin image using Gemini AI and return condition with confidence."""
     try:
+        # Read the image as binary
         with open(image_path, "rb") as image_file:
             image_bytes = image_file.read()
 
-        # Prepare the image for Gemini API
+        # Gemini input formatting
         image_part = {
-            "mime_type": "image/jpeg",  # Adjust mime type if your allowed_extensions include other formats
+            "mime_type": "image/jpeg",
             "data": image_bytes
         }
 
-        # Define the prompt for Gemini
+        # Structured prompt to Gemini
         prompt_parts = [
             image_part,
-            """see the image and tell me which of the following medical condition it is:
+            """See the image and return the most likely medical condition and your confidence.
+
+Choose only from:
 1. Tinea Ringworm Candidiasis
 2. Vascular Lesion
 3. Melanoma
@@ -621,93 +626,131 @@ def predict_image(image_path):
 8. Benign Keratosis
 9. Actinic Keratosis
 10. Unknown
-Dont answer anything else just the medical condition nothing else"""
+11. No Skin Cancer Detected
+
+Return ONLY in this format:
+Condition: <exact name>
+Confidence: <float between 0 and 1>
+
+If you are confused or unsure between two or more, just return:
+Condition: Unknown
+Confidence: 0.0"""
         ]
 
-        # Generate content using Gemini
+        # Call Gemini
         response = gemini_model.generate_content(prompt_parts)
-        
-        # Extract the text response
-        gemini_prediction = response.text.strip()
+        gemini_text = response.text.strip()
 
-        # For simplicity, we'll assume Gemini gives a direct answer.
-        # In a real application, you might need more sophisticated parsing
-        # or ask Gemini to return a structured JSON.
-
-        # Map Gemini's response to a known class or 'Unknown'
-        # This is a simplified mapping. You might need to refine this based on Gemini's output
-        # and your `details.json` conditions.
-        
-        # Get all possible condition names from details.json for comparison
-        all_known_conditions = [name.lower() for name in condition_details.keys()] if condition_details else []
-        
-        predicted_class = "Unknown"
-        # Check if Gemini's prediction is one of the known conditions
-        for condition in all_known_conditions:
-            if condition in gemini_prediction.lower():
-                predicted_class = condition.replace('-', ' ').title() # Format to match your details.json if needed
-                break
-        
-        # If Gemini explicitly says "Unknown", set it as such
-        if "unknown" in gemini_prediction.lower():
-            predicted_class = "Unknown"
-        
-        import random
-
-        # Gemini does not provide confidence scores in the same way as a classification model.
-        # We'll simulate a high confidence for a direct prediction, and low for unknown.
-        top_confidence_score = random.uniform(0.80, 1.00) if predicted_class != "Unknown" else random.uniform(0.0, 0.20)
-
-        # For 'all_confidences', we can only provide a placeholder or a single entry
-        # since Gemini doesn't output multiple class confidences directly.
-        all_confidences = [{
-            'class': predicted_class,
-            'confidence': top_confidence_score,
-            'percentage': top_confidence_score * 100
-        }]
-        
-        # If the predicted class is 'Unknown' due to low confidence (or Gemini's explicit 'Unknown')
-        if predicted_class == 'Unknown':
+        # ✅ Confusion fallback: Check if Gemini lists multiple possible conditions
+        lower_text = gemini_text.lower()
+        confusion_keywords = [" or ", "possibly", "maybe", "could be", "might be", "not sure", "and ", "/"]
+        if any(k in lower_text for k in confusion_keywords) and "condition:" not in lower_text:
             return {
                 'top_prediction': {
                     'class': 'Unknown',
-                    'confidence': float(top_confidence_score),
+                    'confidence': 0.0,
                     'details': {
                         'name': 'Unknown Condition',
-                        'causes': ['The AI could not confidently identify the condition.', 'Please consult a healthcare professional for proper diagnosis.'],
-                        'potential_harms': ['Accurate diagnosis requires medical expertise.'],
-                        'possible_progression': ['Medical evaluation recommended for accurate assessment.']
+                        'causes': ['The AI was unsure and mentioned multiple possible conditions.'],
+                        'potential_harms': ['Consult a healthcare professional for accurate diagnosis.'],
+                        'possible_progression': ['Uncertainty requires professional follow-up.']
                     }
                 },
-                'all_confidences': all_confidences
+                'all_confidences': [{
+                    'class': 'Unknown',
+                    'confidence': 0.0,
+                    'percentage': 0.0
+                }]
             }
-        
-        # Get detailed condition information
-        condition_info = get_condition_info(predicted_class)
-        
-        result = {
-            'top_prediction': {
-                'class': predicted_class,
-                'confidence': float(top_confidence_score)
-            },
-            'all_confidences': all_confidences
-        }
-        
-        if condition_info:
-            result['top_prediction']['details'] = condition_info
-        else:
-            # Fallback if the predicted class from Gemini doesn't have details in details.json
-            result['top_prediction']['details'] = {
-                'name': predicted_class,
-                'causes': ['Information not available in database.'],
+
+        # ✅ Extract structured result
+        match = re.search(r"Condition:\s*(.+?)\s*Confidence:\s*([0-9.]+)", gemini_text, re.IGNORECASE)
+        if not match:
+            return {
+                'error': 'Could not parse Gemini response. Raw output:\n' + gemini_text
+            }
+
+        condition_name = match.group(1).strip()
+        confidence = float(match.group(2).strip())
+        condition_name_lower = condition_name.lower()
+
+        # Unknown handling
+        if "unknown" in condition_name_lower:
+            return {
+                'top_prediction': {
+                    'class': 'Unknown',
+                    'confidence': confidence,
+                    'details': {
+                        'name': 'Unknown Condition',
+                        'causes': ['The AI could not confidently identify the condition.'],
+                        'potential_harms': ['Further diagnosis by a medical professional is recommended.'],
+                        'possible_progression': ['Medical evaluation is advised.']
+                    }
+                },
+                'all_confidences': [{
+                    'class': 'Unknown',
+                    'confidence': confidence,
+                    'percentage': confidence * 100
+                }]
+            }
+
+        # No cancer case
+        if "no skin cancer" in condition_name_lower:
+            return {
+                'top_prediction': {
+                    'class': 'No Skin Cancer Detected',
+                    'confidence': confidence,
+                    'details': {
+                        'name': 'No Skin Cancer Detected',
+                        'causes': ['No visible signs of skin cancer were detected.'],
+                        'potential_harms': ['None identified.'],
+                        'possible_progression': ['Keep monitoring regularly.']
+                    }
+                },
+                'all_confidences': [{
+                    'class': 'No Skin Cancer Detected',
+                    'confidence': confidence,
+                    'percentage': confidence * 100
+                }]
+            }
+
+        # Match with known classes from your DB
+        all_known_conditions = [name.lower() for name in condition_details.keys()] if condition_details else []
+        matched_class = None
+        for cond in all_known_conditions:
+            if cond in condition_name_lower:
+                matched_class = cond.title()
+                break
+
+        if not matched_class:
+            matched_class = condition_name.title()
+
+        condition_info = get_condition_info(matched_class)
+        if not condition_info:
+            condition_info = {
+                'name': matched_class,
+                'causes': ['Information not found in database.'],
                 'potential_harms': ['Consult a healthcare professional.'],
-                'possible_progression': ['Consult a healthcare professional.']
+                'possible_progression': ['Seek further diagnosis if symptoms persist.']
             }
-        
-        return result
-    
+
+        return {
+            'top_prediction': {
+                'class': matched_class,
+                'confidence': confidence,
+                'details': condition_info
+            },
+            'all_confidences': [{
+                'class': matched_class,
+                'confidence': confidence,
+                'percentage': confidence * 100
+            }]
+        }
+
     except Exception as e:
         return {'error': str(e)}
+
+
 
 
 USERNAME = "admin"
